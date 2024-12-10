@@ -23,11 +23,34 @@ def transform_json(input_json):
     transformed_data = {
         "paper_title": input_json.get("paper_title", "Not available"),
         "DOI": input_json.get("DOI", "Not available"),
-        "analysis": input_json.get("result", [])
+        "analysis": []
     }
+
+    # Recorrer los resultados del análisis
+    for result in input_json.get("result", []):
+        question_category = result.get("question_category", "Unknown Category")
+        selected_answer_dict = result.get("selected_answer", {})
+        
+        # Manejo de claves en `selected_answer` para buscar la respuesta
+        selected_answer = "Not available"
+        for key, value in selected_answer_dict.items():
+            if question_category.replace(" ", "_").lower() in key.lower():
+                selected_answer = value.strip()
+                break
+
+        evidences = result.get("evidences", [])
+
+        # Añadir la información procesada
+        transformed_data["analysis"].append({
+            "question_category": question_category,
+            "selected_answer": selected_answer,
+            "evidences": evidences
+        })
+
     return transformed_data
 
 # Página JSON
+
 def json_page():
     st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
 
@@ -50,7 +73,6 @@ def json_page():
 
             if voter_name:
                 st.success(f"Welcome, {voter_name}! You can now cast your votes.")
-                
 
                 # Información general del documento
                 with st.expander("Paper Information"):
@@ -62,70 +84,56 @@ def json_page():
                         """, unsafe_allow_html=True)
 
                 if "analysis" in transformed_json:
+                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)  
                     st.subheader("Answers found in the PDF")
-                    st.write("Below are the answers our system found in the input PDF. You will see the answers divided in 5 tables: catalyst/co-catalyst, light source/lamp, reaction medium, reactor type and operation mode. Each answer has the five most relevant paragraphs the system found in the paper. Please vote for each paragraph (up or down) whether the target text has the right answer for the corresponding category.")
-                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)   
+                    st.write("Below are the answers our system found in the input PDF. You will see the answers divided in 5 tables: catalyst, co-catalyst, light_source, lamp, reaction_medium, reactor_type and operation_mode. Each answer has the five most relevant paragraphs the system found in the paper. Please vote for each paragraph (up or down) whether the target text has the right answer for the corresponding category.")
+                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)  
 
                     for analysis_idx, analysis in enumerate(transformed_json["analysis"]):
-                        # Mostrar información clave encima del expander
-                        generation = analysis.get("generation", {})
-                        info = " | ".join(
-                            f"**{key.replace('_', ' ').capitalize()}**: {value.strip()}"
-                            for key, value in generation.items()
+                        # Mostrar categoría y tipo directamente con formato
+                        category = analysis.get('question_category', 'Unknown Category').capitalize()
+                        selected_answer = analysis.get('selected_answer', 'Not available')
+
+                        # Mostrar con formato mejorado
+                        st.markdown(
+                            f"<p style='font-size:14px;'><strong>{category}:</strong> <span style='font-weight:normal;'>{selected_answer}</span></p>",
+                            unsafe_allow_html=True
                         )
-                        st.markdown(info)
 
-                        # Crear expander para detalles específicos de la categoría
-                        with st.expander("View details"):
-                            if "evidence" in analysis:
-                                st.markdown("### Evidence and References")
-                                for paragraph_idx, evidence in enumerate(analysis["evidence"]):
-                                    pdf_reference = evidence.get("pdf_reference", "Not available")
+                        # Crear expander para evidencias
+                        with st.expander("View Evidence Details"):
+                            for evidence_idx, evidence in enumerate(analysis.get("evidences", [])):
+                                pdf_reference = evidence.get("pdf_reference", "Not available")
 
-                                    # Inicializar estado de votos para cada párrafo
-                                    key_vote = f"vote_{analysis_idx}_{paragraph_idx}"
-                                    if key_vote not in st.session_state:
-                                        st.session_state[key_vote] = None
+                                # Inicializar estado de votos
+                                key_vote = f"{voter_name}_vote_{analysis_idx}_{evidence_idx}"
+                                if key_vote not in st.session_state:
+                                    st.session_state[key_vote] = None
 
-                                    # Botones de votación
-                                    col1, col2 = st.columns([8,2])
-                                
-                                    with col1:
-                                        st.markdown(f"#### Paragraph {paragraph_idx + 1} -  " + f"PDF reference:")
-                                        st.markdown(f" {pdf_reference}")
-                                            
-                                    with col2:
-                                        
-                                        upvote_disabled = st.session_state[key_vote] == "Positive"
-                                        downvote_disabled = st.session_state[key_vote] == "Negative"
-                                        
-                                        if st.button(
-                                            "↑",
-                                            key=f"{voter_name}_button_up_{analysis_idx}_{paragraph_idx}",
-                                            disabled=upvote_disabled
-                                        ):
-                                            st.session_state[key_vote] = "Positive"
-                                        if st.button(
-                                            "↓",
-                                            key=f"{voter_name}_button_down_{analysis_idx}_{paragraph_idx}",
-                                            disabled=downvote_disabled
+                                # Mostrar evidencia
+                                st.markdown(f"<p style='font-size:14px;'><strong>PDF Reference:</strong> {pdf_reference}</p>", unsafe_allow_html=True)
 
-                                        ):
-                                            st.session_state[key_vote] = "Negative"
+                                # Botones de votación
+                                col1, col2 = st.columns([8, 2])
+                                with col2:
+                                    upvote_disabled = st.session_state[key_vote] == "Positive"
+                                    downvote_disabled = st.session_state[key_vote] == "Negative"
 
-                                    evidence["votes"] = {
-                                        "Voter": voter_name,
-                                        "Voto": st.session_state[key_vote]
+                                    if st.button("↑", key=f"{voter_name}_button_up_{analysis_idx}_{evidence_idx}", disabled=upvote_disabled):
+                                        st.session_state[key_vote] = "Positive"
 
-                                    }
-                                    
-                                    st.markdown("---")
+                                    if st.button("↓", key=f"{voter_name}_button_down_{analysis_idx}_{evidence_idx}", disabled=downvote_disabled):
+                                        st.session_state[key_vote] = "Negative"
 
+                                # Guardar voto
+                                evidence["votes"] = {
+                                    "Voter": voter_name,
+                                    "Vote": st.session_state[key_vote]
+                                }
 
-                    # Botón para descargar el archivo CSV
+                    # Descargar JSON actualizado
                     st.markdown("### Download Updated JSON")
-                    updated_json = transformed_json
-                    updated_json_data = json.dumps(updated_json, indent=4)
+                    updated_json_data = json.dumps(transformed_json, indent=4)
                     st.download_button(
                         label="Download JSON",
                         data=updated_json_data,
@@ -136,7 +144,6 @@ def json_page():
                 st.warning("Please enter your name to enable voting.")
         except Exception as e:
             st.error(f"Error loading JSON file: {e}")
-
 
 
     
