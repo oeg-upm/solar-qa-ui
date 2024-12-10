@@ -8,107 +8,143 @@ import requests
 import fitz
 import io
 
-def str2bool(v):
-    return v.lower() in ("yes", "true", "t", "1")
-
 # Función para inicializar claves en st.session_state
-def initialize_votes_state(analysis_idx, paragraph_idx):
-    # Crear claves únicas para "Me gusta" y "No me gusta"
-    key_upvote = f"votes_up_{analysis_idx}_{paragraph_idx}"
-    key_downvote = f"votes_down_{analysis_idx}_{paragraph_idx}"
+def initialize_votes_state(analysis_idx, paragraph_idx, voter_name):
 
-    # Inicializar claves en st.session_state si no existen
-    if key_upvote not in st.session_state:
-        st.session_state[key_upvote] = 0
-    if key_downvote not in st.session_state:
-        st.session_state[key_downvote] = 0
+    key_vote = f"{voter_name}_vote_{analysis_idx}_{paragraph_idx}"
 
-    # Retornar las claves para uso posterior
-    return key_upvote, key_downvote
+    if key_vote not in st.session_state:
+        st.session_state[key_vote] = None  # Ningun voto inicialmente
 
+    return key_vote
 
-# Función para la página "JSON"
+# Transformar JSON
+def transform_json(input_json):
+    transformed_data = {
+        "paper_title": input_json.get("paper_title", "Not available"),
+        "DOI": input_json.get("DOI", "Not available"),
+        "analysis": []
+    }
+
+    # Recorrer los resultados del análisis
+    for result in input_json.get("result", []):
+        question_category = result.get("question_category", "Unknown Category")
+        selected_answer_dict = result.get("selected_answer", {})
+        
+        # Manejo de claves en `selected_answer` para buscar la respuesta
+        selected_answer = "Not available"
+        for key, value in selected_answer_dict.items():
+            if question_category.replace(" ", "_").lower() in key.lower():
+                selected_answer = value.strip()
+                break
+
+        evidences = result.get("evidences", [])
+
+        # Añadir la información procesada
+        transformed_data["analysis"].append({
+            "question_category": question_category,
+            "selected_answer": selected_answer,
+            "evidences": evidences
+        })
+
+    return transformed_data
+
+# Página JSON
+
 def json_page():
-
-    # Agregar espacio
     st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([1, 13, 1])
     with col2:
-        st.image("images/logo_pg.png", width=600)
+        st.image("https://github.com/oeg-upm/solar-qa-ui/web/images/logo_pg.png", width=600)
 
-    # Agregar espacio
-    st.markdown("<div style='height: 80px;'></div>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center;'>JSON INFORMATION</h2>", unsafe_allow_html=True)
 
-    #st.markdown("<h2 style='text-align: center;'>JSON</h2>", unsafe_allow_html=True)
+    uploaded_json = st.file_uploader("Upload JSON file", type="json")
 
-    # Nuevo código para subir un archivo JSON desde la interfaz
-    uploaded_json = st.file_uploader("Sube un archivo JSON", type="json")
-
-    # Paso 2: Leer y mostrar el contenido del JSON con formato
     if uploaded_json is not None:
         try:
-            # Cargar el contenido del archivo JSON
             json_content = json.load(uploaded_json)
+            transformed_json = transform_json(json_content)
 
-            with st.expander("Información del Paper"):
-                paper_id = json_content.get("paper_id", "No disponible")
-                paper_title = json_content.get("paper_title", "No disponible")
-                st.markdown(f"""
-                    <h4 style='color:#333;'>ID:</h4>
-                    <p style='font-size:16px; color:#555;'>{paper_id}</p>
-                    <h4 style='color:#333;'>TÍTULO:</h4>
-                    <p style='font-size:16px; color:#555;'>{paper_title}</p>
-                    """, unsafe_allow_html=True)
+            # Solicitar nombre del usuario
+            st.markdown("### Please enter your name to continue:")
+            voter_name = st.text_input("Enter your name:")
 
-            # Expander para cada análisis dentro de la lista
-            if "analysis" in json_content:
-                st.subheader("Análisis")
-                ##for analysis in json_content["analysis"]:
-                for analysis_idx, analysis in enumerate(json_content["analysis"]):
-                    # Acceder a los valores de `generation` y construir un título estilizado
-                    generation = analysis.get("generation", {})
-                    title_parts = [
-                        f"<strong style='color:#333;'>{key.capitalize()}</strong>: <span style='font-size:14px; color:#555;'>Tipo</span> "
-                        f"<span style='font-size:16px; color:#1E90FF;'>{value}</span>"  # Valor en color azul
-                        for key, value in generation.items()
-                    ]
-                    expander_title = " | ".join(title_parts)  # Usa "|" para separar cada parte del título
+            if voter_name:
+                st.success(f"Welcome, {voter_name}! You can now cast your votes.")
 
-                    # Mostrar el título antes del `expander`
-                    st.markdown(f"<div style='font-size:17px; color:#111;'><strong>{expander_title}</strong></div>", unsafe_allow_html=True)
+                # Información general del documento
+                with st.expander("Paper Information"):
+                    st.markdown(f"""
+                        <h4 style='color:#333;'>TITLE:</h4>
+                        <p style='font-size:16px; color:#555;'>{transformed_json['paper_title']}</p>
+                        <h4 style='color:#333;'>DOI:</h4>
+                        <p style='font-size:16px; color:#555;'>{transformed_json['DOI']}</p>
+                        """, unsafe_allow_html=True)
 
-                    # Expander con el título estilizado
-                    with st.expander("View details"):
-                    # Mostrar información de `reference_paragraphs` de manera estructurada
-                        if "reference_paragraphs" in analysis:
-                            for paragraph_idx, paragraph in enumerate(analysis["reference_paragraphs"]):
-                            ##for idx, paragraph in enumerate(analysis["reference_paragraphs"]):
-                                pdf_reference = paragraph.get("pdf_reference", "No disponible")
-                                #similarity_score = paragraph.get("similarity_score", "No disponible")
-                                
-                                key_upvote, key_downvote = initialize_votes_state(analysis_idx, paragraph_idx)
+                if "analysis" in transformed_json:
+                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)  
+                    st.subheader("Answers found in the PDF")
+                    st.write("Below are the answers our system found in the input PDF. You will see the answers divided in 5 tables: catalyst, co-catalyst, light_source, lamp, reaction_medium, reactor_type and operation_mode. Each answer has the five most relevant paragraphs the system found in the paper. Please vote for each paragraph (up or down) whether the target text has the right answer for the corresponding category.")
+                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)  
 
-                                # Formato visual para cada párrafo
-                                st.markdown(f"**Párrafo {paragraph_idx + 1}**")
-                                #st.markdown(f"- **Puntuación de Similitud:** `{similarity_score}`")
-                                st.markdown(f"- **Referencia del PDF:** {pdf_reference}")
-        
-                                #col1, col2 = st.columns([1, 4])
-                                col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([1, 1, 1, 1, 2, 2, 1, 1, 1, 1])
-                                with col5:
-                                    if st.button("👍", key="button_up_" + str(analysis_idx) + "_" + str(paragraph_idx)):
-                                        st.session_state[key_upvote] += 1
-                                with col6:
-                                    if st.button("👎", key="button_down_" + str(analysis_idx) + "_" + str(paragraph_idx)):
-                                        st.session_state[key_downvote] += 1
-                                st.markdown(f"- Like: {st.session_state[key_upvote]}")
-                                st.markdown(f"- Dislike: {st.session_state[key_downvote]}")
-                                # Línea divisoria entre párrafos
-                                st.markdown("---")  
-                            
-        except json.JSONDecodeError:
-            st.error("El archivo subido no es un JSON válido. Por favor, verifica el formato.")
+                    for analysis_idx, analysis in enumerate(transformed_json["analysis"]):
+                        # Mostrar categoría y tipo directamente con formato
+                        category = analysis.get('question_category', 'Unknown Category').capitalize()
+                        selected_answer = analysis.get('selected_answer', 'Not available')
+
+                        # Mostrar con formato mejorado
+                        st.markdown(
+                            f"<p style='font-size:14px;'><strong>{category}:</strong> <span style='font-weight:normal;'>{selected_answer}</span></p>",
+                            unsafe_allow_html=True
+                        )
+
+                        # Crear expander para evidencias
+                        with st.expander("View Evidence Details"):
+                            for evidence_idx, evidence in enumerate(analysis.get("evidences", [])):
+                                pdf_reference = evidence.get("pdf_reference", "Not available")
+
+                                # Inicializar estado de votos
+                                key_vote = f"{voter_name}_vote_{analysis_idx}_{evidence_idx}"
+                                if key_vote not in st.session_state:
+                                    st.session_state[key_vote] = None
+
+                                # Mostrar evidencia
+                                st.markdown(f"<p style='font-size:14px;'><strong>PDF Reference:</strong> {pdf_reference}</p>", unsafe_allow_html=True)
+
+                                # Botones de votación
+                                col1, col2 = st.columns([8, 2])
+                                with col2:
+                                    upvote_disabled = st.session_state[key_vote] == "Positive"
+                                    downvote_disabled = st.session_state[key_vote] == "Negative"
+
+                                    if st.button("↑", key=f"{voter_name}_button_up_{analysis_idx}_{evidence_idx}", disabled=upvote_disabled):
+                                        st.session_state[key_vote] = "Positive"
+
+                                    if st.button("↓", key=f"{voter_name}_button_down_{analysis_idx}_{evidence_idx}", disabled=downvote_disabled):
+                                        st.session_state[key_vote] = "Negative"
+
+                                # Guardar voto
+                                evidence["votes"] = {
+                                    "Voter": voter_name,
+                                    "Vote": st.session_state[key_vote]
+                                }
+
+                    # Descargar JSON actualizado
+                    st.markdown("### Download Updated JSON")
+                    updated_json_data = json.dumps(transformed_json, indent=4)
+                    st.download_button(
+                        label="Download JSON",
+                        data=updated_json_data,
+                        file_name=f"{voter_name}_updated.json",
+                        mime="application/json"
+                    )
+            else:
+                st.warning("Please enter your name to enable voting.")
+        except Exception as e:
+            st.error(f"Error loading JSON file: {e}")
+
 
     
     # Agregar espacio antes del pie de página
