@@ -49,3 +49,5 @@ This will start a FastAPI server accessible from http://127.0.0.1:8000
 2. Navigate to the directory where the streamlit.py file is located.
 3. Run the frontend with:
 
+  streamlit run file_name.py 
+  For example: streamlit run streamlit.py
