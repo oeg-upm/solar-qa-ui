@@ -7,72 +7,113 @@ import time
 import requests
 import fitz
 import io
+import pandas as pd
+from fastapi import FastAPI
+from pydantic import BaseModel
 
 # Función para inicializar claves en st.session_state
-def initialize_votes_state(analysis_idx, paragraph_idx, voter_name):
-
-    key_vote = f"{voter_name}_vote_{analysis_idx}_{paragraph_idx}"
+def initialize_votes_state(analysis_idx, paragraph_idx):
+    key_vote = f"vote_{analysis_idx}_{paragraph_idx}"
 
     if key_vote not in st.session_state:
-        st.session_state[key_vote] = None  # Ningun voto inicialmente
+        st.session_state[key_vote] = None  # Ningún voto inicialmente
 
     return key_vote
 
 # Transformar JSON
-def transform_json(input_json):
+def transform_json(input_json, annotator_name):
     transformed_data = {
         "paper_title": input_json.get("paper_title", "Not available"),
         "DOI": input_json.get("DOI", "Not available"),
-        "analysis": []
+        "annotator_name": annotator_name,  # Registrar el nombre del votante solo una vez
+        "generation_model": input_json.get("generation_model", "Not available"),
+        "similarity_model": input_json.get("similarity_model", "Not available"),
+        "similarity_metric": input_json.get("similarity_metric", "Not available"),
+        "rag_type":input_json.get("rag_type", "Not available"),
+        #"analysis": []
+        "result": []
     }
 
     # Recorrer los resultados del análisis
     for result in input_json.get("result", []):
         question_category = result.get("question_category", "Unknown Category")
+        query = result.get("query", "Not available")
+        generation = result.get("generation", "Not available")
+        RAG_source = result.get("RAG_source", "Not available")
+        ground_truth = result.get("ground_truth", "Not available")
         selected_answer_dict = result.get("selected_answer", {})
         
-        # Manejo de claves en `selected_answer` para buscar la respuesta
+        #Manejo de claves en `selected_answer` para buscar la respuesta
         selected_answer = "Not available"
         for key, value in selected_answer_dict.items():
             if question_category.replace(" ", "_").lower() in key.lower():
-                selected_answer = value.strip()
+                selected_answer = f"{key}: {value.strip()}"
                 break
 
         evidences = result.get("evidences", [])
 
         # Añadir la información procesada
-        transformed_data["analysis"].append({
+        analysis_entry = {
             "question_category": question_category,
+            "query": query,
+            "generation": generation,
+            "RAG_source": RAG_source,
+            "ground_truth": ground_truth,
             "selected_answer": selected_answer,
-            "evidences": evidences
-        })
+            "evidences": []
+        }
+
+        for evidence_idx, evidence in enumerate(evidences):
+            pdf_reference = evidence.get("pdf_reference", "Not available")
+            generated_facts = evidence.get("generated_facts", "Not available")
+            similarity_score = evidence.get("similarity_score", None)
+            
+            # Añadir evidencia al análisis con espacio para votos
+            evidence_entry = {
+                "pdf_reference": pdf_reference,
+                "generated_facts": generated_facts,
+                "similarity_score": similarity_score,
+            }
+
+            analysis_entry["evidences"].append(evidence_entry)
+
+        #transformed_data["analysis"].append(analysis_entry)
+        transformed_data["result"].append(analysis_entry)
+        
 
     return transformed_data
 
 # Página JSON
-
 def json_page():
     st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([1, 13, 1])
     with col2:
+        #st.image("/Users/alexandrafaje/Desktop/Solar/solar_chem/logo_pg.png", width=600)
         st.image("https://github.com/oeg-upm/solar-qa-ui/web/images/logo_pg.png", width=600)
 
-    st.markdown("<h2 style='text-align: center;'>JSON INFORMATION</h2>", unsafe_allow_html=True)
+    # Agregar espacio antes del pie de página
+    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)   
 
-    uploaded_json = st.file_uploader("Upload JSON file", type="json")
+    st.markdown("<h4 style='text-align: center;'>View the answers and evaluate them using our voting system.</h4>", unsafe_allow_html=True)
+
+    # Agregar espacio antes del pie de página
+    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)   
+
+    uploaded_json = st.file_uploader("Upload your JSON file please.", type="json")
 
     if uploaded_json is not None:
         try:
             json_content = json.load(uploaded_json)
-            transformed_json = transform_json(json_content)
 
             # Solicitar nombre del usuario
             st.markdown("### Please enter your name to continue:")
-            voter_name = st.text_input("Enter your name:")
+            annotator_name = st.text_input("Enter your name:")
 
-            if voter_name:
-                st.success(f"Welcome, {voter_name}! You can now cast your votes.")
+            if annotator_name:
+                st.success(f"Welcome, {annotator_name}! You can now cast your votes.")
+
+                transformed_json = transform_json(json_content, annotator_name)
 
                 # Información general del documento
                 with st.expander("Paper Information"):
@@ -83,53 +124,74 @@ def json_page():
                         <p style='font-size:16px; color:#555;'>{transformed_json['DOI']}</p>
                         """, unsafe_allow_html=True)
 
-                if "analysis" in transformed_json:
+                #if "analysis" in transformed_json:
+                if "result" in transformed_json:    
+
                     st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)  
                     st.subheader("Answers found in the PDF")
                     st.write("Below are the answers our system found in the input PDF. You will see the answers divided in 5 tables: catalyst, co-catalyst, light_source, lamp, reaction_medium, reactor_type and operation_mode. Each answer has the five most relevant paragraphs the system found in the paper. Please vote for each paragraph (up or down) whether the target text has the right answer for the corresponding category.")
-                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)  
+                    #st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)  
 
-                    for analysis_idx, analysis in enumerate(transformed_json["analysis"]):
+                    for analysis_idx, analysis in enumerate(transformed_json["result"]):
                         # Mostrar categoría y tipo directamente con formato
                         category = analysis.get('question_category', 'Unknown Category').capitalize()
                         selected_answer = analysis.get('selected_answer', 'Not available')
 
-                        # Mostrar con formato mejorado
                         st.markdown(
                             f"<p style='font-size:14px;'><strong>{category}:</strong> <span style='font-weight:normal;'>{selected_answer}</span></p>",
                             unsafe_allow_html=True
                         )
 
-                        # Crear expander para evidencias
+                        # Función de callback para actualizar el voto
+                        def update_vote(key_vote, value):
+                            st.session_state[key_vote] = value
+                            
                         with st.expander("View Evidence Details"):
                             for evidence_idx, evidence in enumerate(analysis.get("evidences", [])):
                                 pdf_reference = evidence.get("pdf_reference", "Not available")
 
-                                # Inicializar estado de votos
-                                key_vote = f"{voter_name}_vote_{analysis_idx}_{evidence_idx}"
+                                key_vote = f"vote_{analysis_idx}_{evidence_idx}"
                                 if key_vote not in st.session_state:
                                     st.session_state[key_vote] = None
 
-                                # Mostrar evidencia
-                                st.markdown(f"<p style='font-size:14px;'><strong>PDF Reference:</strong> {pdf_reference}</p>", unsafe_allow_html=True)
+                                col_pdf, col_votes = st.columns([3, 1])
 
-                                # Botones de votación
-                                col1, col2 = st.columns([8, 2])
-                                with col2:
-                                    upvote_disabled = st.session_state[key_vote] == "Positive"
-                                    downvote_disabled = st.session_state[key_vote] == "Negative"
+                                with col_pdf:
+                                    # Mostrar el contenido del PDF
+                                    st.markdown(
+                                        f"<div style='border: 1px solid #ddd; padding: 10px; margin-bottom: 15px; border-radius: 5px;'>"
+                                        f"<p style='font-size:14px; line-height:1.6;'><strong>PDF Reference:</strong> {pdf_reference}</p>"
+                                        f"</div>",
+                                        unsafe_allow_html=True
+                                    )
 
-                                    if st.button("↑", key=f"{voter_name}_button_up_{analysis_idx}_{evidence_idx}", disabled=upvote_disabled):
-                                        st.session_state[key_vote] = "Positive"
+                                with col_votes:
+                                    # Estado actual
+                                    current_vote = st.session_state[key_vote]
 
-                                    if st.button("↓", key=f"{voter_name}_button_down_{analysis_idx}_{evidence_idx}", disabled=downvote_disabled):
-                                        st.session_state[key_vote] = "Negative"
+                                    # Botón UPVOTE: callback con actualización inmediata
+                                    if current_vote != "1":
+                                        st.button("↑", key=f"upvote_{key_vote}", on_click=update_vote, args=(key_vote, "1"))
+                                    else:
+                                        st.success("↑")
 
-                                # Guardar voto
-                                evidence["votes"] = {
-                                    "Voter": voter_name,
-                                    "Vote": st.session_state[key_vote]
-                                }
+                                    # Botón DOWNVOTE: callback con actualización inmediata
+                                    if current_vote != "0":
+                                        st.button("↓", key=f"downvote_{key_vote}", on_click=update_vote, args=(key_vote, "0"))
+                                    else:
+                                        st.error("↓")
+
+                                # Guardar el voto
+                                current_vote = st.session_state[key_vote]
+
+                                # Asegurar que el voto es una cadena (0 o 1)
+                                if current_vote is not None:
+                                    current_vote = str(current_vote)  # Convertir a cadena para comparación
+
+                                if current_vote in ["0", "1"]:  # Solo añadir si es 0 o 1
+                                    evidence["vote"] = current_vote
+                                elif "vote" in evidence:  # Eliminar campo 'vote' si existe pero no es válido
+                                    del evidence["vote"]
 
                     # Descargar JSON actualizado
                     st.markdown("### Download Updated JSON")
@@ -137,7 +199,7 @@ def json_page():
                     st.download_button(
                         label="Download JSON",
                         data=updated_json_data,
-                        file_name=f"{voter_name}_updated.json",
+                        file_name=f"{annotator_name}_updated.json",
                         mime="application/json"
                     )
             else:
@@ -146,16 +208,16 @@ def json_page():
             st.error(f"Error loading JSON file: {e}")
 
 
-    
+            
     # Agregar espacio antes del pie de página
     st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)    
 
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center;'>
-        <a href="https://github.com/oeg-upm/solar-qa" style="text-decoration: none;">
+        <a href="https://github.com/oeg-upm/solar-qa-ui" style="text-decoration: none;">
             <img src="https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg" alt="GitHub Logo" width="18" style="vertical-align: middle;"/>
-        https://github.com/oeg-upm/solar-qa
+        https://github.com/oeg-upm/solar-qa-ui
         </a> | CLI Version: 1 | © 2024 SolarChem
     </div>
     """, unsafe_allow_html=True)
@@ -163,7 +225,11 @@ def json_page():
     # Crear una columna para centrar la imagen
     col1, col2, col3, col4 = st.columns([4, 2, 2, 2])
     with col2:
+        #st.image("/Users/alexandrafaje/Desktop/Solar/solar_chem/logo_uni.png", width=150)
         st.image("images/logo_uni.png", width=150)
+        
+        
+        
 
 # Cargamos el JSON automaticamente
 def load_json_automatically(json_path):
@@ -173,7 +239,7 @@ def load_json_automatically(json_path):
         #st.write("Archivo JSON cargado automáticamente.")
         return query_data
     else:
-        st.error(f"El archivo JSON no se encontró en la ruta: {json_path}")
+        st.error(f"JSON file not found in path: {json_path}")
         return None
 
 # Pagina principal
@@ -184,98 +250,110 @@ def main_page():
 
     col1, col2, col3 = st.columns([1, 13, 1])
     with col2:
-        st.image("images/logo_pg.png", width=600)
-
-    #Mostrar imagen con logo pero sin columna
-    #st.image("images/logo_pg.png", width=600)
+        #st.image("/Users/alexandrafaje/Desktop/Solar/solar_chem/logo_pg.png", width=600)
+        st.image("https://github.com/oeg-upm/solar-qa-ui/web/images/logo_pg.png", width=600)
 
     # Agregar espacio
     st.markdown("<div style='height: 80px;'></div>", unsafe_allow_html=True)
 
     # Cargar archivo JSON de configuración
-    json_path = "prompts.json"  # Usa una ruta relativa
+    json_path = "prompts.json"
     query_data = load_json_automatically(json_path)
 
-    # Cargar el archivo PDF
-    uploaded_pdf = st.file_uploader("Sube tu archivo PDF", type="pdf")
-    
-    # Verificar si se ha subido un archivo y si se ha presionado el botón Submit
-    if uploaded_pdf is not None and st.button("Submit"):
-        with st.spinner('Analyzing your paper... Please be patient'):
+    # Subir archivo PDF
+    uploaded_pdf = st.file_uploader("Upload your scientific paper please", type=["pdf"])
+    doi = st.text_input("DOI (Optional):")
+
+    # Botón para enviar el archivo
+    if uploaded_pdf and st.button("Submit"):
+        with st.spinner("Analyzing your paper. Please be patient..."):
             try:
-                # Crear un diccionario de argumentos
                 args_dict = {
-                    "use_platform": "True",
-                    "user_key": "",
-                    "llm_id": "llama3-groq-8b-8192-tool-use-preview",
-                    "hf_key": "",
-                    "llm_platform": "groq",
-                    "sim_model_id": "Salesforce/SFR-Embedding-Mistral",
+                    "llm_id": "llama3.1",
+                    "embedding_id": "nomic-embed-text",
                     "input_file_path": uploaded_pdf.name,
-                    "prompt_file_pdf": json_path,
-                    "context_file_path": "context_result.json"
+                    #"input_file_path": "/Users/alexandrafaje/Desktop/Solar/solar_chem/new_paper_1.pdf",
+                    "prompt_file": "prompts.json",
+                    "context_file_path": "context.json",
+                    "rag_type": "fact"
                 }
-                
-                # Enviar solicitud al backend
+
+                # Llamada al backend
                 response = requests.post("http://127.0.0.1:8000/analysis/", json=args_dict)
-                
-                # Verificar si la respuesta fue exitosa
+
+                # Validar respuesta
                 if response.status_code == 200:
-                    result = response.json()["result"]
-                    context = response.json()["context"]
-                    
-                    st.write("Respuesta completa del backend:", context)
+                    temp = response.json()
 
-                    # Mostrar Resultados Principales
-                    if result:
-                        st.subheader("Análisis - Resultados Principales")
-                        st.write("Catalyst: " + str(result.get("catalyst", "No disponible")))
-                        st.write("Co_catalyst: " + str(result.get("co_catalyst", "No disponible")))
-                        st.write("Light_source: " + str(result.get("Light_source", "No disponible")))
-                        st.write("Lamp: " + str(result.get("Lamp", "No disponible")))
-                        st.write("Reaction_medium: " + str(result.get("Reaction_medium", "No disponible")))
-                        st.write("Reactor_type: " + str(result.get("Reactor_type", "No disponible")))
-                        st.write("Operation_mode: " + str(result.get("Operation_mode", "No disponible")))
+                    if doi:
+                        temp["DOI"] = doi
 
-                        # Mostrar el modelo utilizado
-                        #generation_model = response.json().get("generation_model", "No disponible")
-                        #st.markdown(f"**Modelo utilizado:** {generation_model}")
+                    result = temp.get("result", [])
+                    generation_model = temp.get("generation_model", "Not available")
 
-                    # Mostrar Evidencias Detalladas con el formato específico
-                    st.subheader("Evidencias Detalladas")
-                    
-                    evidencias = context.get("result", [])  # Lista de evidencias
-                    
-                    titulos = [
-                        "Catalyst: Tipo " + str(result.get("catalyst", "No disponible")) + 
-                        " | Co_catalyst: Tipo " + str(result.get("co_catalyst", "No disponible")),
-                        "Light_source: Tipo " + str(result.get("Light_source", "No disponible")) + 
-                        " | Lamp: Tipo " + str(result.get("Lamp", "No disponible")),
-                        "Reaction_medium: Tipo " + str(result.get("Reaction_medium", "No disponible")),
-                        "Reactor_type: Tipo " + str(result.get("Reactor_type", "No disponible")),
-                        "Operation_mode: Tipo " + str(result.get("Operation_mode", "No disponible"))
-                    ]
+                    # Información general del documento
+                    with st.expander("Paper Information"):
+                        st.markdown(f"""
+                            <h4 style='color:#333;'>TITLE:</h4>
+                            <p style='font-size:16px; color:#555;'>{temp.get("paper_title", "No disponible")}</p>
+                            <h4 style='color:#333;'>DOI:</h4>
+                            <p style='font-size:16px; color:#555;'>{temp.get("DOI", "No disponible")}</p>
+                            """, unsafe_allow_html=True)
 
-                    for idx, evidence_entry in enumerate(evidencias):
-                        if idx < len(titulos):
-                            expander_title = titulos[idx]
-                        else:
-                            expander_title = "Evidencia {}".format(idx + 1)
-                        
-                        with st.expander(expander_title):
-                            for e_idx, detalle in enumerate(evidence_entry.get("evidence", [])):
-                                pdf_reference = detalle.get("pdf_reference", "No disponible")
-                                #similarity_score = detalle.get("similarity_score", "No disponible")
-                                
-                                st.markdown(f"**Párrafo {e_idx + 1}**")
-                                #st.markdown(f"- **Puntuación de Similitud:** `{similarity_score}`")
-                                st.markdown(f"- **Referencia del PDF:** {pdf_reference}")
-                                st.markdown("---")
+                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
+                    st.subheader("Answers found in the PDF")
+                    st.write("Below are the answers our system found in the input PDF. You will see the answers divided in 5 tables: catalyst, co-catalyst, light_source, lamp, reaction_medium, reactor_type and operation_mode. Each answer has the five most relevant paragraphs the system found in the paper. Please vote for each paragraph (up or down) whether the target text has the right answer for the corresponding category.")
+                    st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
+
+                    # Mostrar resultados por categoría con evidencia y votación
+                    for analysis_idx, analysis in enumerate(result):
+                        category = analysis.get('question_category', 'Unknown Category').capitalize()
+                        selected_answer = analysis.get('selected_answer', {}).get(category.lower(), 'Not available')
+
+
+                        st.markdown(
+                            f"<p style='font-size:14px;'><strong>{category}:</strong> "
+                            f"<span style='font-weight:normal;'>{selected_answer}</span></p>",
+                            unsafe_allow_html=True
+                        )
+
+                        with st.expander("View Evidence Details"):
+                            for evidence_idx, evidence in enumerate(analysis.get("evidences", [])):
+                                pdf_reference = evidence.get("pdf_reference", "Not available")
+
+                                st.markdown(
+                                    f"<div style='border: 1px solid #ddd; padding: 10px; margin-bottom: 15px; "
+                                    f"border-radius: 5px;'>"
+                                    f"<p style='font-size:14px; line-height:1.6;'>"
+                                    f"<strong>PDF Reference:</strong> {pdf_reference}</p>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                 )
+
+                    # Descargar JSON actualizado
+                    st.markdown("### Download Updated JSON")
+                    updated_json_data = json.dumps(temp, indent=4)
+                    st.download_button(
+                        label="Download JSON",
+                        data=updated_json_data,
+                        file_name=f"analysis_updated.json",
+                        mime="application/json"
+                    )
+
                 else:
-                    st.error("Error al procesar el PDF.")
-                    st.write("Respuesta del servidor:", response.text)
+                    st.error(f"Error en el servidor: {response.status_code}")
+                    if response.text:
+                        st.error(f"Detalles: {response.text}")
+
+            except requests.exceptions.ConnectionError:
+                st.error("Error: No se pudo conectar al servidor. Verifica que el backend está activo.")
+            except json.JSONDecodeError:
+                st.error("Error: El servidor devolvió una respuesta no válida.")
             except Exception as e:
-                st.error(f"Error al conectar con el backend: {e}")
+                st.error(f"Error inesperado: {e}")
+
+
+
 
     # Agregar espacio antes del pie de página
     st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
@@ -283,9 +361,9 @@ def main_page():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center;'>
-        <a href="https://github.com/oeg-upm/solar-qa" style="text-decoration: none;">
+        <a href="https://github.com/oeg-upm/solar-qa-ui" style="text-decoration: none;">
             <img src="https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg" alt="GitHub Logo" width="18" style="vertical-align: middle;"/>
-        https://github.com/oeg-upm/solar-qa
+        https://github.com/oeg-upm/solar-qa-ui
         </a> | CLI Version: 1 | © 2024 SolarChem
     </div>
     """, unsafe_allow_html=True)
@@ -293,6 +371,7 @@ def main_page():
     # Crear una columna para centrar la imagen
     col1, col2, col3, col4 = st.columns([4, 2, 2, 2])
     with col2:
+        #st.image("/Users/alexandrafaje/Desktop/Solar/solar_chem/logo_uni.png", width=150)
         st.image("images/logo_uni.png", width=150)
 
 # About page
@@ -303,10 +382,8 @@ def about_page():
 
     col1, col2, col3 = st.columns([1, 13, 1])
     with col2:
-        st.image("images/logo_pg.png", width=600)
-    
-    #st.image("images/logo_pg.png", width=600)
-
+        #st.image("/Users/alexandrafaje/Desktop/Solar/solar_chem/logo_pg.png", width=600)
+        st.image("https://github.com/oeg-upm/solar-qa-ui/web/images/logo_pg.png", width=600)
     
     st.markdown("<h2 style='text-align: center;'>ABOUT</h2>", unsafe_allow_html=True)
     st.markdown("---")
@@ -343,9 +420,9 @@ def about_page():
 
     st.markdown("""
     <div style='text-align: center;'>
-        <a href="https://github.com/oeg-upm/solar-qa" style="text-decoration: none;">
+        <a href="https://github.com/oeg-upm/solar-qa-ui" style="text-decoration: none;">
             <img src="https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg" alt="GitHub Logo" width="18" style="vertical-align: middle;"/>
-        https://github.com/oeg-upm/solar-qa
+        https://github.com/oeg-upm/solar-qa-ui
         </a> | CLI Version: 1 | © 2024 SolarChem
     </div>
     """, unsafe_allow_html=True)
@@ -353,6 +430,7 @@ def about_page():
     # Crear una columna para centrar la imagen
     col1, col2, col3, col4 = st.columns([4, 2, 2, 2])
     with col2:
+        #st.image("/Users/alexandrafaje/Desktop/Solar/solar_chem/logo_uni.png", width=150)
         st.image("images/logo_uni.png", width=150)
 
 
@@ -383,4 +461,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
